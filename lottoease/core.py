@@ -1,10 +1,18 @@
-from curl_cffi import requests
+import os
 import re
-import time
+
+from curl_cffi import requests
+from dotenv import load_dotenv
+from twocaptcha import TwoCaptcha
+
+
+load_dotenv()
 
 
 FETCH_SHOWS_URL = 'https://lottery.broadwaydirect.com/'
 ENTER_INDIVIDUAL_LOTTERY_URL = 'https://lottery.broadwaydirect.com/enter-lottery/'
+API_KEY_TWOCAPTCHA = os.getenv('API_KEY_TWOCAPTCHA')
+RECAPTCHA_SITE_KEY_BROADWAY_DIRECT = '6LeIhQ4TAAAAACUkR1rzWeVk63ko-sACUlB7i932'
 
 
 class LotteryApplier(object):
@@ -28,8 +36,8 @@ class LotteryApplier(object):
         for show_name in show_names:
             showtime_ids = self.get_showtime_lotteries(show_name)
             for showtime_id in showtime_ids:
-                nonce_token = self.generate_nonce_token(showtime_id)
-                self.enter_showtime_lottery(showtime_id, nonce_token)
+                nonce_token, recaptcha_token = self.generate_nonce_and_recaptcha_tokens(showtime_id)
+                self.enter_showtime_lottery(showtime_id, nonce_token, recaptcha_token)
                 num_showtimes_applied += 1
             
             if showtime_ids:
@@ -59,7 +67,7 @@ class LotteryApplier(object):
         return unique_show_names
         
 
-    def generate_nonce_token(self, showtime_id):
+    def generate_nonce_and_recaptcha_tokens(self, showtime_id):
         params = {
             'lottery': f'{showtime_id}',
             'window': 'popup',
@@ -76,7 +84,28 @@ class LotteryApplier(object):
         # <input type="hidden" id="dlslot_nonce" name="dlslot_nonce" value="194b24b759"/>
         nonce_regex = 'name="dlslot_nonce" value="(.*?)"'
         nonce_value = re.findall(nonce_regex, response.text)
-        return nonce_value[0]
+
+        recaptcha_regex = 'class="g-recaptcha'
+        recaptcha_token = None
+        showtime_url = ENTER_INDIVIDUAL_LOTTERY_URL + f'?lottery={showtime_id}&window=popup'
+        if re.search(recaptcha_regex, response.text):
+            recaptcha_token = self.generate_recaptcha_token(showtime_url)
+
+        return nonce_value[0], recaptcha_token
+    
+    def generate_recaptcha_token(self, showtime_url):
+        print(f'Recaptcha required. Fetching recaptcha response token...')
+        solver = TwoCaptcha(API_KEY_TWOCAPTCHA)
+        try:
+            result = solver.recaptcha(
+                sitekey=RECAPTCHA_SITE_KEY_BROADWAY_DIRECT,
+                url=showtime_url)
+
+        except Exception as e:
+            print(e)
+        
+        return result.get('code')
+
     
     def get_showtime_lotteries(self, show_name):
         print(f'Fetching active showtimes for {show_name}...')
@@ -91,8 +120,6 @@ class LotteryApplier(object):
         # snippet of sample response below, need to parse for showtime_id '825610'
         # <a href="https://lottery.broadwaydirect.com/enter-lottery/?lottery=825610&window=popup" class="btn btn-primary enter-button enter-lottery-link">
 
-        # TODO: add functionality to only pull ids from showtimes we want (i.e. not matinees)
-
         showtime_id_regex = 'lottery=(.*?)\&'
         unique_showtime_ids = set()
         showtime_ids = re.findall(showtime_id_regex, response.text)
@@ -103,7 +130,7 @@ class LotteryApplier(object):
         return unique_showtime_ids
         
         
-    def enter_showtime_lottery(self, showtime_id, nonce_token): 
+    def enter_showtime_lottery(self, showtime_id, nonce_token, recaptcha_token): 
         # enter lottery
 
         print(f'Entering lottery for showtime_id: {showtime_id}')
@@ -114,14 +141,14 @@ class LotteryApplier(object):
 
         # dummy data for now 
         data = {
-            'dlslot_name_first': 'george',
-            'dlslot_name_last': 'georgeson',
+            'dlslot_name_first': 'ed',
+            'dlslot_name_last': 'edson',
             'dlslot_ticket_qty': '1',
             'dlslot_email': f'{self.email}',
-            'dlslot_dob_month': '08',
-            'dlslot_dob_day': '08',
-            'dlslot_dob_year': '1998',
-            'dlslot_zip': '10008',
+            'dlslot_dob_month': '09',
+            'dlslot_dob_day': '09',
+            'dlslot_dob_year': '1999',
+            'dlslot_zip': '10009',
             'dlslot_country': '2',
             'dlslot_agree': 'true',
             'dlslot_website': '',
@@ -130,25 +157,21 @@ class LotteryApplier(object):
             '_wp_http_referer': f'/enter-lottery/?lottery={showtime_id}&window=popup',
         }
 
+        if recaptcha_token:
+            data['g-recaptcha-response'] = recaptcha_token
+
         r = requests.post(
             ENTER_INDIVIDUAL_LOTTERY_URL,
             impersonate="chrome",
             params=params,
             allow_redirects=False,
-            headers=self._get_request_headers(content_type='application/x-www-form-urlencoded'),
+            headers=self._get_request_headers(
+                content_type='application/x-www-form-urlencoded',
+                ),
             data=data,
         )
-
-        print(r.text)
-
-        # try:
-        #     res = r.json()
-        # except Exception as e:
-        #     print(f'An error occurred trying to enter lottery: {e}')
-        #     print(f'return from api call: {r}')
-        #     raise e
         
-        print('hey')
+        print(f'Entered lottery for showtime {showtime_id}')
 
     def _get_request_headers(self, content_type=None):
         headers = {
@@ -160,11 +183,9 @@ class LotteryApplier(object):
             'sec-ch-ua': '"Google Chrome";v="125", "Chromium";v="125", "Not.A/Brand";v="24"',
             'sec-ch-ua-mobile': '?0',
             'sec-ch-ua-platform': '"macOS"',
-            # 'sec-fetch-dest': 'iframe',    # from fetching showtimes
-            'sec-fetch-dest': 'document',    # from entering lottery
+            'sec-fetch-dest': 'document',
             'sec-fetch-mode': 'navigate',   
-            # 'sec-fetch-site': 'none',     # from fetching showtimes and show names
-            'sec-fetch-site': 'same-origin',     # from entering lottery
+            'sec-fetch-site': 'same-origin',
             'sec-fetch-user': '?1',
             'upgrade-insecure-requests': '1',
             'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',

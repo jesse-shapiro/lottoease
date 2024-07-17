@@ -12,4 +12,10 @@ In order to enter a Broadway lottery, you usually need to input the same informa
 
 Here's where LottoEase comes into play - with some quick initial setup, you will be able to enter all the Broadway lotteries with the click of a button!
 
+![Using LottoEase](/images/lottoease_logs.png "Using LottoEase")
+
+Without lifting another finger, any Broadway shows with available showtime lotteries will be entered! 
+![Lottery Entrance Emails](/images/lottoease_entries.png "Lottery Entrance Emails")
+
+
 Have fun and enjoy the show!
